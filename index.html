@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>露点計算＆相対湿度グラフ</title>
+    <!-- Chart.jsライブラリをCDNから読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f4f7f9;
+        }
+        .container {
+            background: #ffffff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 90%;
+            max-width: 600px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 1.5rem;
+        }
+        .input-group {
+            margin-bottom: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .input-group label {
+            margin-bottom: 0.5rem;
+            color: #555;
+        }
+        .input-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 0.75rem;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-bottom: 1rem;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+        .output-group {
+            background-color: #e9ecef;
+            padding: 0.75rem;
+            border-radius: 4px;
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }
+        .output-group strong {
+            color: #007bff;
+        }
+        .chart-container {
+            width: 100%;
+        }
+        .error-message {
+            color: #d93025;
+            margin-top: 1rem;
+            min-height: 1.2em;
+        }
+    </style>
+
+    <!-- PWA Settings -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('service-worker.js');
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>露点計算＆相対湿度グラフ</h1>
+        <div class="input-group">
+            <label for="airTemp">現在の気温 (°C):</label>
+            <input type="number" id="airTemp" value="25" step="0.1">
+        </div>
+        <div class="input-group">
+            <label for="humidity">現在の相対湿度 (%):</label>
+            <input type="number" id="humidity" value="55" min="0" max="100">
+        </div>
+        <button id="calculateBtn">グラフを生成</button>
+        <div id="dewPointOutput" class="output-group" style="display: none;"></div>
+        <div class="chart-container">
+            <canvas id="humidityChart"></canvas>
+        </div>
+        <p id="errorMessage" class="error-message"></p>
+    </div>
+    <script>
+        window.onload = function() {
+            const airTempInput = document.getElementById('airTemp');
+            const humidityInput = document.getElementById('humidity');
+            const calculateBtn = document.getElementById('calculateBtn');
+            const dewPointOutput = document.getElementById('dewPointOutput');
+            const errorMessage = document.getElementById('errorMessage');
+            const ctx = document.getElementById('humidityChart').getContext('2d');
+
+            let humidityChart;
+
+            const MAGNUS_A = 17.625;
+            const MAGNUS_B = 243.04;
+            const SVP_CONSTANT = 6.1094;
+
+            function calculateSVP(temp) {
+                return SVP_CONSTANT * Math.exp((MAGNUS_A * temp) / (temp + MAGNUS_B));
+            }
+
+            function calculateDewPoint(temp, rh) {
+                const svp = calculateSVP(temp);
+                const avp = (rh / 100) * svp;
+                const logAvp = Math.log(avp / SVP_CONSTANT);
+                const dewPoint = (MAGNUS_B * logAvp) / (MAGNUS_A - logAvp);
+                return dewPoint;
+            }
+
+            function updateChart() {
+                const airTemp = parseFloat(airTempInput.value);
+                const humidity = parseFloat(humidityInput.value);
+
+                if (isNaN(airTemp) || isNaN(humidity)) {
+                    errorMessage.textContent = '有効な数値を入力してください。';
+                    return;
+                }
+                 if (humidity < 0 || humidity > 100) {
+                    errorMessage.textContent = '相対湿度は0%から100%の間で入力してください。';
+                    return;
+                }
+                errorMessage.textContent = '';
+
+                const dewPoint = calculateDewPoint(airTemp, humidity);
+                dewPointOutput.innerHTML = `計算された露点温度: <strong>${dewPoint.toFixed(2)} °C</strong>`;
+                dewPointOutput.style.display = 'block';
+
+                const actualVaporPressure = calculateSVP(dewPoint);
+                const labels = [];
+                const data = [];
+                const pointRadii = [];
+                const pointColors = [];
+                
+                const roundedAirTemp = Math.round(airTemp);
+                const roundedDewPoint = Math.round(dewPoint);
+
+                const graphStartTemp = Math.min(roundedDewPoint, roundedAirTemp) - 10;
+                const graphEndTemp = Math.max(roundedDewPoint, roundedAirTemp) + 10;
+
+                for (let temp = graphStartTemp; temp <= graphEndTemp; temp++) {
+                    labels.push(temp);
+                    const saturationVaporPressure = calculateSVP(temp);
+                    const relativeHumidity = (actualVaporPressure / saturationVaporPressure) * 100;
+                    data.push(Math.min(100, relativeHumidity));
+
+                    if (temp === roundedAirTemp) {
+                        pointRadii.push(6);
+                        pointColors.push('rgba(255, 99, 132, 1)'); // 赤: 現在点
+                    } else if (temp === roundedDewPoint) {
+                        pointRadii.push(6);
+                        pointColors.push('rgba(75, 192, 192, 1)'); // 緑: 露点
+                    } else {
+                        pointRadii.push(3);
+                        pointColors.push('rgba(0, 123, 255, 0.8)');
+                    }
+                }
+
+                if (humidityChart) {
+                    humidityChart.destroy();
+                }
+
+                humidityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: `相対湿度 (%) [露点: ${dewPoint.toFixed(2)}°C]`,
+                            data: data,
+                            borderColor: 'rgba(0, 123, 255, 1)',
+                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: pointRadii,
+                            pointBackgroundColor: pointColors,
+                            pointHoverRadius: 8,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: { title: { display: true, text: '気温 (°C)' } },
+                            y: { title: { display: true, text: '相対湿度 (%)' }, min: 0, max: 105 }
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `相対湿度: ${context.parsed.y.toFixed(1)}%`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            calculateBtn.addEventListener('click', updateChart);
+            updateChart();
+        };
+    </script>
+</body>
+</html>
